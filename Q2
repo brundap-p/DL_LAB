@@ -1,0 +1,48 @@
+import pandas as pd
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+
+# Load a built-in dataset (e.g., Iris)
+iris = load_iris()
+df = pd.DataFrame(data=iris.data, columns=iris.feature_names)
+df['target'] = iris.target
+
+display(df.head())
+df.info()
+
+# Separate features and target
+X = df.drop('target', axis=1)
+y = df['target']
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Scale features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+print("Data preprocessing complete.")
+
+# Define the MLP model
+model = Sequential()
+model.add(Dense(10, input_dim=X_train_scaled.shape[1], activation='relu'))
+model.add(Dense(8, activation='relu'))
+model.add(Dense(3, activation='softmax'))  # 3 classes for Iris dataset
+
+model.summary()
+
+# Compile the model
+model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+# Train the model
+history = model.fit(X_train_scaled, y_train, epochs=50, batch_size=5, validation_split=0.2)
+print("Model training complete.")
+
+# Evaluate the model
+loss, accuracy = model.evaluate(X_test_scaled, y_test)
+print(f"Test Loss: {loss:.4f}")
+print(f"Test Accuracy: {accuracy:.4f}")
