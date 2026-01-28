@@ -1,0 +1,50 @@
+!pip install transformers torch -q
+
+import pandas as pd
+import torch
+from transformers import BertTokenizer, BertForMaskedLM
+
+data = pd.read_csv("bbc-text.csv")
+text = " ".join(data["text"][:300])  # use head only
+
+data.head(300)
+
+#pretrained BERT
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+model = BertForMaskedLM.from_pretrained("bert-base-uncased")
+model.eval()
+
+#Next word prediction
+import re
+
+def predict_next_word(sentence, top_k=10):
+    masked_sentence = sentence.strip() + " [MASK]"
+    inputs = tokenizer(masked_sentence, return_tensors="pt")
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    mask_index = torch.where(
+        inputs["input_ids"] == tokenizer.mask_token_id
+    )[1]
+
+    logits = outputs.logits[0, mask_index, :]
+    top_tokens = torch.topk(logits, top_k, dim=1).indices[0]
+
+    words = []
+    for tok in top_tokens:
+        word = tokenizer.decode([tok]).strip()
+
+        # keep only real words
+        if word.isalpha():
+            words.append(word)
+
+        if len(words) == 3:   # return top 3 words
+            break
+
+    return words
+
+#Test
+
+sentence = input("Enter a sentence: ")
+print("Predicted next words:", predict_next_word(sentence))
