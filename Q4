@@ -1,0 +1,140 @@
+from sklearn.datasets import load_digits
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+
+# Load the digits dataset
+digits = load_digits()
+
+# Print the description of the dataset
+print(digits.DESCR)
+
+# Display the shape of the data and target
+print("Data shape:", digits.data.shape)
+print("Target shape:", digits.target.shape)
+
+# Display the first few samples of the data
+print("First 5 data samples:\n", digits.data[:5])
+
+# Display the first few target labels
+print("First 5 target labels:\n", digits.target[:5])
+
+# Check for missing values
+if np.isnan(digits.data).sum() == 0:
+    print("No missing values found in the dataset.")
+else:
+    print("Missing values found. Further handling might be needed.")
+
+# Initialize the MinMaxScaler
+scaler = MinMaxScaler()
+
+# Apply Min-Max scaling to the data
+X_scaled = scaler.fit_transform(digits.data)
+
+print("Original data min/max:", digits.data.min(), "/", digits.data.max())
+print("Scaled data min/max:", X_scaled.min(), "/", X_scaled.max())
+print("Shape of scaled data:", X_scaled.shape)
+
+# Split the data into training and testing sets
+# We'll use 80% for training and 20% for testing
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, digits.target, test_size=0.2, random_state=42)
+
+print("Shape of training features (X_train):", X_train.shape)
+print("Shape of testing features (X_test):", X_test.shape)
+print("Shape of training labels (y_train):", y_train.shape)
+print("Shape of testing labels (y_test):", y_test.shape)
+
+# Define the model
+model = keras.Sequential([
+    layers.Input(shape=(64,)), # Input layer, 64 features (8x8 pixels)
+    layers.Dense(128, activation='relu'), # First hidden layer with 128 neurons and ReLU activation
+    layers.Dense(64, activation='relu'),  # Second hidden layer with 64 neurons and ReLU activation
+    layers.Dense(10, activation='softmax') # Output layer with 10 neurons (for 10 classes) and softmax activation
+])
+
+# Display the model summary
+model.summary()
+
+# Compile the model
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy',
+    metrics=['accuracy']
+)
+
+# Train the model
+history = model.fit(
+    X_train,
+    y_train,
+    epochs=50, # You can adjust the number of epochs
+    batch_size=32, # You can adjust the batch size
+    validation_split=0.1, # Use a small portion of training data for validation during training
+    verbose=1
+)
+
+# Evaluate the model on the test data
+loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"Test Loss: {loss:.4f}")
+print(f"Test Accuracy: {accuracy:.4f}")
+
+BATCH_SIZE = 8
+
+# Create a TensorFlow Dataset for the training data with the new BATCH_SIZE
+train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train)) \
+    .shuffle(buffer_size=X_train.shape[0]) \
+    .batch(BATCH_SIZE)
+
+# Create a TensorFlow Dataset for the testing data with the new BATCH_SIZE
+test_dataset = tf.data.Dataset.from_tensor_slices((X_test, y_test)) \
+    .batch(BATCH_SIZE)
+
+print(f"Training dataset created with new batch size: {BATCH_SIZE}")
+print(f"Testing dataset created with new batch size: {BATCH_SIZE}")
+
+# Get one batch of data for demonstration
+for x_batch, y_batch in train_dataset.take(1):
+    break # Get the first batch
+
+# Store initial weights (for the first layer, for example) to observe changes
+initial_weights = model.trainable_variables[0].numpy().copy()
+
+# Create an optimizer (we'll use Adam, as specified earlier)
+optimizer = tf.keras.optimizers.Adam()
+
+with tf.GradientTape() as tape:
+    # Forward pass: get model predictions
+    logits = model(x_batch, training=True)
+    # Calculate loss
+    loss_value = model.compiled_loss(y_batch, logits)
+
+# Compute gradients with respect to the model's trainable variables
+gradients = tape.gradient(loss_value, model.trainable_variables)
+
+print(f"\nLoss for this batch: {loss_value.numpy():.4f}")
+
+print("\n--- Gradients for the first layer's weights (a slice): ---")
+print(gradients[0].numpy()[:5, :5]) # Display a slice of gradients for the first layer's weights
+
+# Apply gradients to update model weights
+optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+
+# Store updated weights
+updated_weights = model.trainable_variables[0].numpy().copy()
+
+print("\n--- Initial weights of the first layer (a slice): ---")
+print(initial_weights[:5, :5])
+
+print("\n--- Updated weights of the first layer (a slice): ---")
+print(updated_weights[:5, :5])
+
+print("\n--- Difference in weights (updated - initial, a slice): ---")
+print((updated_weights - initial_weights)[:5, :5])
+
+# Now, let's display the accuracy of this single batch using model.evaluate
+# This uses the compiled metrics correctly.
+results = model.evaluate(x_batch, y_batch, verbose=0)
+loss_batch, accuracy_batch = results[0], results[1]
+print(f"\nAccuracy for this batch: {accuracy_batch:.4f}")
