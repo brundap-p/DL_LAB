@@ -1,0 +1,83 @@
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense
+
+# -----------------------------------------
+# 1. LOAD SHAKESPEARE DATA (LIMIT SIZE)
+# -----------------------------------------
+path = tf.keras.utils.get_file(
+    "shakespeare.txt",
+    "https://storage.googleapis.com/download.tensorflow.org/data/shakespeare.txt"
+)
+
+# LIMIT DATA to avoid memory crash
+text = open(path, 'r', encoding='utf-8').read().lower()[:50000]
+
+# -----------------------------------------
+# 2. TOKENIZATION
+# -----------------------------------------
+tokenizer = Tokenizer()
+tokenizer.fit_on_texts([text])
+total_words = len(tokenizer.word_index) + 1
+
+# -----------------------------------------
+# 3. CREATE INPUT SEQUENCES
+# -----------------------------------------
+input_sequences = []
+
+for line in text.split("\n"):
+    token_list = tokenizer.texts_to_sequences([line])[0]
+    for i in range(1, len(token_list)):
+        input_sequences.append(token_list[:i+1])
+
+# -----------------------------------------
+# 4. PAD SEQUENCES
+# -----------------------------------------
+max_len = max(len(seq) for seq in input_sequences)
+input_sequences = pad_sequences(input_sequences, maxlen=max_len, padding='pre')
+
+X = input_sequences[:, :-1]
+y = input_sequences[:, -1]   # ❌ NO to_categorical()
+
+# -----------------------------------------
+# 5. BUILD LIGHTWEIGHT LSTM MODEL
+# -----------------------------------------
+model = Sequential([
+    Embedding(total_words, 32, input_length=max_len-1),
+    LSTM(64),
+    Dense(total_words, activation='softmax')
+])
+
+# USE SPARSE LOSS (KEY FIX)
+model.compile(
+    loss='sparse_categorical_crossentropy',
+    optimizer='adam',
+    metrics=['accuracy']
+)
+
+# -----------------------------------------
+# 6. TRAIN MODEL (SAFE EPOCHS)
+# -----------------------------------------
+model.fit(X, y, epochs=10, batch_size=128, verbose=1)
+
+print("\nModel training completed successfully")
+
+# -----------------------------------------
+# 7. NEXT WORD PREDICTION FUNCTION
+# -----------------------------------------
+def predict_next_word(model, tokenizer, text, max_len):
+    token_list = tokenizer.texts_to_sequences([text.lower()])[0]
+    token_list = pad_sequences([token_list], maxlen=max_len-1, padding='pre')
+    predicted_index = np.argmax(model.predict(token_list, verbose=0))
+
+    for word, index in tokenizer.word_index.items():
+        if index == predicted_index:
+            return word
+    return "No prediction"
+# -----------------------------------------
+# 8. USER INPUT
+user_input = input("\nEnter a sentence: ")
+print("Predicted Next Word:", predict_next_word(model, tokenizer, user_input, max_len))
