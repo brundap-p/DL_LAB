@@ -1,0 +1,144 @@
+pip install tensorflow
+
+import tensorflow as tf
+import tensorflow_datasets as tfds
+from tensorflow.keras import layers, models
+from tensorflow.keras.applications import VGG16, InceptionV3, ResNet50, EfficientNetB0
+import matplotlib.pyplot as plt
+import numpy as np
+import time
+
+# USER SETTINGS (easy to change)
+# -------------------------
+
+IMG_SIZE = 160        # image size used for all models (keeps memory moderate)
+BATCH = 32
+EPOCHS = 3            # short for quick comparison; increase to improve results
+AUTOTUNE = tf.data.AUTOTUNE
+
+# 1. LOAD TF_FLOWERS DATASET (80% train, 20% test)
+
+print("\nLoading tf_flowers dataset (this may download ~80MB)...")
+(ds_train_raw, ds_test_raw), ds_info = tfds.load(
+    "tf_flowers",
+    split=["train[:80%]", "train[80%:]"],
+    as_supervised=True,
+    with_info=True
+)
+
+num_classes = ds_info.features['label'].num_classes
+try:
+    class_names = ds_info.features['label'].names
+except Exception:
+    class_names = [str(i) for i in range(num_classes)]
+
+print(f"Dataset loaded. {ds_info.splits['train'].num_examples} total examples.")
+print(f"Using ~{int(ds_info.splits['train'].num_examples * 0.8)} train and ~{int(ds_info.splits['train'].num_examples * 0.2)} test.")
+print("Classes:", class_names)
+print()
+
+# 2. PREPROCESS (resize + scale)
+
+def preprocess(image, label):
+    image = tf.image.resize(image, (IMG_SIZE, IMG_SIZE))
+    image = tf.cast(image, tf.float32) / 255.0
+    return image, label
+
+ds_train = ds_train_raw.map(preprocess, num_parallel_calls=AUTOTUNE)
+ds_train = ds_train.shuffle(1000).batch(BATCH).prefetch(AUTOTUNE)
+
+ds_test = ds_test_raw.map(preprocess, num_parallel_calls=AUTOTUNE)
+ds_test = ds_test.batch(BATCH).prefetch(AUTOTUNE)
+
+# 3. Helper: build, train, evaluate a model
+
+def build_head_and_compile(base_model, num_classes):
+    base_model.trainable = False
+    model = models.Sequential([
+        base_model,
+        layers.GlobalAveragePooling2D(),
+        layers.Dense(128, activation="relu"),
+        layers.Dropout(0.3),
+        layers.Dense(num_classes, activation="softmax")
+    ])
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"]
+    )
+    return model
+
+def run_experiment(name, base_builder):
+    print(f"\n------ {name} ------")
+    t0 = time.time()
+    # create base model with ImageNet weights
+    base = base_builder(weights="imagenet", include_top=False, input_shape=(IMG_SIZE, IMG_SIZE, 3))
+    model = build_head_and_compile(base, num_classes)
+    print("Model summary (top layers):")
+    model.summary()
+    # train
+    history = model.fit(ds_train, validation_data=ds_test, epochs=EPOCHS, verbose=2)
+    # evaluate
+    loss, acc = model.evaluate(ds_test, verbose=2)
+    t1 = time.time()
+    duration = t1 - t0
+    print(f"{name} -> test_acc: {acc:.4f}  |  time(s): {duration:.1f}")
+    return {"name": name, "accuracy": float(acc), "loss": float(loss), "time_s": duration}
+
+# 4. Run experiments for all 4 models
+
+results = []
+# Keep order consistent
+models_to_run = [
+    ("VGG16", VGG16),
+    ("InceptionV3", InceptionV3),
+    ("ResNet50", ResNet50),
+    ("EfficientNetB0", EfficientNetB0)
+]
+
+for name, builder in models_to_run:
+    try:
+        res = run_experiment(name, builder)
+        results.append(res)
+    except Exception as e:
+        print(f"Error running {name}: {e}")
+        # If OOM or other issue, suggest lowering batch size or IMG_SIZE
+        results.append({"name": name, "accuracy": None, "loss": None, "time_s": None})
+
+# -------------------------
+# 5. Print comparison table
+# -------------------------
+print("\n\n==================== Comparison Summary ====================\n")
+print(f"{'Model':20} {'Accuracy':10} {'Loss':10} {'Time(s)':10}")
+print("-"*56)
+for r in results:
+    acc = f"{r['accuracy']:.4f}" if r['accuracy'] is not None else "N/A"
+    loss = f"{r['loss']:.4f}" if r['loss'] is not None else "N/A"
+    t = f"{r['time_s']:.1f}" if r['time_s'] is not None else "N/A"
+    print(f"{r['name']:20} {acc:10} {loss:10} {t:10}")
+print("\n============================================================\n")
+
+# 6. Simple bar chart of accuracies
+
+names = [r['name'] for r in results if r['accuracy'] is not None]
+accs  = [r['accuracy'] for r in results if r['accuracy'] is not None]
+
+if names:
+    plt.figure(figsize=(8,4))
+    bars = plt.bar(names, accs)
+    plt.ylim(0,1)
+    plt.title("Model test accuracy comparison on TF Flowers")
+    plt.ylabel("Test Accuracy")
+    for bar, a in zip(bars, accs):
+        plt.text(bar.get_x() + bar.get_width()/2, a + 0.01, f"{a:.3f}", ha='center')
+    plt.show()
+
+# Final short verdict printed
+
+print("Quick verdict:")
+best = max([r for r in results if r['accuracy'] is not None], key=lambda x: x['accuracy'])
+print(f" - Best test accuracy: {best['name']} ({best['accuracy']:.3f})")
+print("\nNotes:")
+print(" - These runs freeze the ImageNet base and train only a small head for speed and fairness.")
+print(" - For better performance unfreeze top layers and fine tune with a low learning rate, and increase EPOCHS.")
+print(" - If you get OOM errors: reduce BATCH, reduce IMG_SIZE, or use a smaller model (MobileNetV2).")
