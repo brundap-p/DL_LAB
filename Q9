@@ -1,0 +1,167 @@
+!apt-get install p7zip-full -y
+!7z x Images.zip
+!7z x captions.txt.zip
+!ls
+!ls Images | head
+!mkdir Images
+!mv *.jpg Images/
+!ls Images | head
+!ls Images | wc -l
+!mkdir Flickr8k
+!mv Images Flickr8k/
+!mv captions.txt Flickr8k/
+!ls Flickr8k
+
+import os
+import numpy as np
+import pickle
+from tqdm import tqdm
+
+import tensorflow as tf
+from tensorflow.keras.applications.vgg16 import VGG16, preprocess_input
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Dense, Embedding, SimpleRNN, Dropout, add
+
+IMAGE_PATH = "/content/Flickr8k/Images/"
+CAPTION_PATH = "/content/Flickr8k/captions.txt"
+
+captions = {}
+
+with open(CAPTION_PATH, 'r') as f:
+    for line in f:
+        tokens = line.strip().split(',')
+        img_id = tokens[0].split('.')[0]
+        caption = " ".join(tokens[1:])
+        caption = "startseq " + caption + " endseq"
+        captions.setdefault(img_id, []).append(caption)
+
+print("Total captions loaded:", len(captions))
+
+def preprocess_image(img_path):
+    image = load_img(img_path, target_size=(224,224))
+    image = img_to_array(image)
+    image = np.expand_dims(image, axis=0)
+    image = preprocess_input(image)
+    return image
+
+if not os.path.exists("image_features.pkl"):
+    vgg = VGG16()
+    vgg = Model(inputs=vgg.inputs, outputs=vgg.layers[-2].output)
+
+    image_features = {}
+
+    for img_name in tqdm(os.listdir(IMAGE_PATH)):
+        img_id = img_name.split('.')[0]
+        try:
+            img = preprocess_image(os.path.join(IMAGE_PATH, img_name))
+            feature = vgg.predict(img, verbose=0)
+            image_features[img_id] = feature[0]
+        except:
+            continue
+
+    pickle.dump(image_features, open("image_features.pkl", "wb"))
+else:
+    image_features = pickle.load(open("image_features.pkl", "rb"))
+
+print("Images with features:", len(image_features))
+
+filtered_captions = {}
+for img_id in image_features.keys():
+    if img_id in captions:
+        filtered_captions[img_id] = captions[img_id]
+
+captions = filtered_captions
+print("Captions after filtering:", len(captions))
+
+if not os.path.exists("tokenizer.pkl"):
+    all_captions = []
+    for caps in captions.values():
+        all_captions.extend(caps)
+
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(all_captions)
+
+    pickle.dump(tokenizer, open("tokenizer.pkl", "wb"))
+else:
+    tokenizer = pickle.load(open("tokenizer.pkl", "rb"))
+
+vocab_size = len(tokenizer.word_index) + 1
+max_length = max(len(c.split()) for c in all_captions)
+
+print("Vocab:", vocab_size)
+print("Max length:", max_length)
+
+def data_generator(captions, image_features, tokenizer, max_length, vocab_size):
+    X1, X2, y = [], [], []
+    while True:
+        for img_id, caps in captions.items():
+            photo = image_features[img_id]
+            for cap in caps:
+                seq = tokenizer.texts_to_sequences([cap])[0]
+                for i in range(1, len(seq)):
+                    in_seq = pad_sequences([seq[:i]], maxlen=max_length)[0]
+                    out_seq = seq[i]
+
+                    X1.append(photo)
+                    X2.append(in_seq)
+                    y.append(out_seq)
+
+                    if len(X1) == 64:
+                        yield ((np.array(X1), np.array(X2)), np.array(y))
+                        X1, X2, y = [], [], []
+                        inputs1 = Input(shape=(4096,))
+fe1 = Dropout(0.5)(inputs1)
+fe2 = Dense(256, activation='relu')(fe1)
+
+inputs2 = Input(shape=(max_length,))
+se1 = Embedding(vocab_size, 256, mask_zero=True)(inputs2)
+se2 = SimpleRNN(256)(se1)
+
+decoder = add([fe2, se2])
+outputs = Dense(vocab_size, activation='softmax')(decoder)
+
+model = Model(inputs=[inputs1, inputs2], outputs=outputs)
+
+model.compile(
+    optimizer='adam',
+    loss='sparse_categorical_crossentropy'
+)
+
+steps = sum(len(c) for c in captions.values())
+
+model.fit(
+    data_generator(captions, image_features, tokenizer, max_length, vocab_size),
+    steps_per_epoch=steps // 64,
+    epochs=5
+)
+
+#STEP 10: Caption Generator Function
+def generate_caption(model, tokenizer, photo, max_length):
+    in_text = "startseq"
+    for _ in range(20):
+        seq = tokenizer.texts_to_sequences([in_text])[0]
+        seq = pad_sequences([seq], maxlen=max_length)
+        yhat = model.predict([photo, seq], verbose=0)
+        yhat = np.argmax(yhat)
+        word = tokenizer.index_word.get(yhat)
+        if word is None:
+            break
+        in_text += " " + word
+        if word == "endseq":
+            break
+    return in_text
+    
+#STEP 12: User Input – Image Path
+while True:
+    img_path = input("\nEnter image path (or 'exit'): ")
+    if img_path.lower() == "exit":
+        break
+
+    img = preprocess_image(img_path)
+    feature = vgg.predict(img, verbose=0)
+    caption = generate_caption(model, tokenizer, feature, max_length)
+    caption = caption.replace("startseq", "").replace("endseq", "")
+    print("Generated Caption:", caption.strip())
